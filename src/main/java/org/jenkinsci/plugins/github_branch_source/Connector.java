@@ -336,7 +336,7 @@ public class Connector {
             Predicate<GitHubServerConfig> configMatcher = new Predicate<GitHubServerConfig>() {
                 @Override
                 public boolean apply(@Nullable GitHubServerConfig cfg) {
-                    return cfg.getApiUrl().equals(finalApiUrl) && cfg.getCredentialsId().equals(credentials.getId());
+                    return cfg.getApiUrl().equals(finalApiUrl);
                 }
             };
             Optional<GitHubServerConfig> gitHubServerConfigs = FluentIterableWrapper
