@@ -35,6 +35,9 @@ import com.cloudbees.plugins.credentials.common.StandardUsernameCredentials;
 import com.cloudbees.plugins.credentials.common.StandardUsernamePasswordCredentials;
 import com.cloudbees.plugins.credentials.domains.DomainRequirement;
 import com.cloudbees.plugins.credentials.domains.URIRequirementBuilder;
+import com.google.common.base.Optional;
+import com.google.common.base.Predicate;
+import com.squareup.okhttp.Cache;
 import com.squareup.okhttp.OkHttpClient;
 import com.squareup.okhttp.OkUrlFactory;
 import edu.umd.cs.findbugs.annotations.NonNull;
@@ -63,11 +66,17 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
 import jenkins.model.Jenkins;
 import jenkins.scm.api.SCMSourceOwner;
 import org.apache.commons.lang.StringUtils;
 import org.jenkinsci.plugins.gitclient.GitClient;
+import org.jenkinsci.plugins.github.GitHubPlugin;
+import org.jenkinsci.plugins.github.config.GitHubPluginConfig;
 import org.jenkinsci.plugins.github.config.GitHubServerConfig;
+import org.jenkinsci.plugins.github.internal.GitHubClientCacheOps;
+import org.jenkinsci.plugins.github.util.FluentIterableWrapper;
 import org.kohsuke.github.GHRateLimit;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
@@ -282,7 +291,7 @@ public class Connector {
         );
     }
 
-    public static @Nonnull GitHub connect(@CheckForNull String apiUri, @CheckForNull StandardCredentials credentials) throws IOException {
+    public static @Nonnull GitHub connect(@CheckForNull String apiUri, @CheckForNull final StandardCredentials credentials) throws IOException {
         String apiUrl = Util.fixEmptyAndTrim(apiUri);
         apiUrl = apiUrl != null ? apiUrl : GitHubServerConfig.GITHUB_URL;
         String username;
@@ -298,6 +307,7 @@ public class Connector {
             password = c.getPassword().getPlainText();
             hash = Util.getDigestOf(password + SALT); // want to ensure pooling by credential
         } else {
+
             // TODO OAuth support
             throw new IOException("Unsupported credential type: " + credentials.getClass().getName());
         }
@@ -321,6 +331,29 @@ public class Connector {
             gb.withRateLimitHandler(CUSTOMIZED);
 
             OkHttpClient client = new OkHttpClient().setProxy(getProxy(host));
+
+            final String finalApiUrl = apiUrl;
+            Predicate<GitHubServerConfig> configMatcher = new Predicate<GitHubServerConfig>() {
+                @Override
+                public boolean apply(@Nullable GitHubServerConfig cfg) {
+                    return cfg.getApiUrl().equals(finalApiUrl) && cfg.getCredentialsId().equals(credentials.getId());
+                }
+            };
+            Optional<GitHubServerConfig> gitHubServerConfigs = FluentIterableWrapper
+                    .from(GitHubPlugin.configuration().getConfigs())
+                    .filter(configMatcher)
+                    .first();
+
+            if (gitHubServerConfigs.isPresent()) {
+                LOGGER.info("github server config found. Setting up cache for API requests. apiUrl=" + finalApiUrl);
+                GitHubServerConfig config = gitHubServerConfigs.get();
+                if (config.getClientCacheSize() > 0) {
+                    Cache cache = GitHubClientCacheOps.toCacheDir().apply(config);
+                    client.setCache(cache);
+                }
+            } else {
+                LOGGER.info("No github server config found. NOT USING CACHE for API requests.");
+            }
 
             gb.withConnector(new OkHttpConnector(new OkUrlFactory(client)));
 
